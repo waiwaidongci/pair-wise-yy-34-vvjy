@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from .audit import make_entry, utc_now
 from .domain import ConflictError, NotFoundError
-from .rules import ID_PREFIX, STATES
+from .rules import ID_PREFIX, STATES, WORKER_STATES
 
 
 class Repository:
@@ -24,6 +24,7 @@ class Repository:
 
     def _create_schema(self) -> None:
         statuses = ",".join("'" + s.replace("'", "''") + "'" for s in STATES)
+        worker_statuses = ",".join("'" + s.replace("'", "''") + "'" for s in WORKER_STATES)
         with self.conn:
             self.conn.executescript(f"""
                 CREATE TABLE IF NOT EXISTS items (
@@ -64,6 +65,45 @@ class Repository:
                     previous_hash TEXT NOT NULL,
                     entry_hash TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS injured_workers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    worker_name TEXT NOT NULL,
+                    worker_no TEXT NOT NULL,
+                    position TEXT NOT NULL,
+                    body_part TEXT NOT NULL,
+                    injury_severity TEXT NOT NULL
+                        CHECK(injury_severity IN ('minor','moderate','severe')),
+                    first_visit_date TEXT NOT NULL,
+                    expected_return_date TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending_followup'
+                        CHECK(status IN ({worker_statuses})),
+                    external_ref TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(item_id, external_ref)
+                );
+                CREATE TABLE IF NOT EXISTS followups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    worker_id INTEGER NOT NULL REFERENCES injured_workers(id) ON DELETE CASCADE,
+                    visit_date TEXT NOT NULL,
+                    activity_level TEXT NOT NULL
+                        CHECK(activity_level IN ('limited','partial','full')),
+                    restrictions TEXT NOT NULL,
+                    doctor_opinion TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS clearance_confirmations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    worker_id INTEGER NOT NULL REFERENCES injured_workers(id) ON DELETE CASCADE,
+                    confirmer_role TEXT NOT NULL
+                        CHECK(confirmer_role IN ('safety_manager','team_leader')),
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(worker_id, confirmer_role)
                 );
             """)
 
@@ -156,6 +196,161 @@ class Repository:
                 (item_id,),
             ).fetchone()
         return int(row["n"])
+
+    def create_worker(self, item_id: int, worker_name: str, worker_no: str,
+                      position: str, body_part: str, injury_severity: str,
+                      first_visit_date: str, expected_return_date: str,
+                      external_ref: Optional[str], actor: str) -> Dict[str, Any]:
+        now = utc_now()
+        self.get_item(item_id)
+        try:
+            with self._lock, self.conn:
+                cur = self.conn.execute(
+                    """INSERT INTO injured_workers(item_id, worker_name, worker_no, position,
+                       body_part, injury_severity, first_visit_date, expected_return_date,
+                       status, external_ref, created_by, created_at, updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (item_id, worker_name, worker_no, position, body_part, injury_severity,
+                     first_visit_date, expected_return_date, WORKER_STATES[0], external_ref,
+                     actor, now, now),
+                )
+                worker_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("伤者唯一标识已存在") from exc
+        return self.get_worker(worker_id)
+
+    def get_worker(self, worker_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM injured_workers WHERE id=?", (worker_id,)).fetchone()
+        if row is None:
+            raise NotFoundError("伤者不存在")
+        return dict(row)
+
+    def get_item_worker(self, item_id: int, worker_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM injured_workers WHERE id=? AND item_id=?",
+                (worker_id, item_id)).fetchone()
+        if row is None:
+            raise NotFoundError("伤者不存在")
+        return dict(row)
+
+    def list_workers(self, item_id: Optional[int] = None, position: Optional[str] = None,
+                     item_status: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql = ("SELECT w.*, i.title AS item_title, i.status AS item_status "
+               "FROM injured_workers w JOIN items i ON i.id=w.item_id")
+        clauses: List[str] = []
+        params: List[Any] = []
+        if item_id is not None:
+            clauses.append("w.item_id=?"); params.append(item_id)
+        if position:
+            clauses.append("w.position=?"); params.append(position)
+        if item_status:
+            clauses.append("i.status=?"); params.append(item_status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY w.id"
+        with self._lock:
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_worker_fields(self, worker_id: int, fields: Dict[str, Any]) -> Dict[str, Any]:
+        now = utc_now()
+        assignments = ", ".join(f"{key}=?" for key in fields)
+        params = list(fields.values()) + [now, worker_id]
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                f"UPDATE injured_workers SET {assignments}, updated_at=? WHERE id=?", params)
+            if cur.rowcount == 0:
+                raise NotFoundError("伤者不存在")
+        return self.get_worker(worker_id)
+
+    def set_worker_status(self, worker_id: int, status: str) -> Dict[str, Any]:
+        now = utc_now()
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                "UPDATE injured_workers SET status=?, updated_at=? WHERE id=?",
+                (status, now, worker_id))
+            if cur.rowcount == 0:
+                raise NotFoundError("伤者不存在")
+        return self.get_worker(worker_id)
+
+    def add_followup(self, worker_id: int, visit_date: str, activity_level: str,
+                     restrictions: str, doctor_opinion: str, actor: str) -> Dict[str, Any]:
+        now = utc_now()
+        self.get_worker(worker_id)
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                """INSERT INTO followups(worker_id, visit_date, activity_level, restrictions,
+                   doctor_opinion, created_by, created_at) VALUES(?,?,?,?,?,?,?)""",
+                (worker_id, visit_date, activity_level, restrictions, doctor_opinion,
+                 actor, now),
+            )
+            followup_id = int(cur.lastrowid)
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM followups WHERE id=?", (followup_id,)).fetchone()
+        return dict(row)
+
+    def get_followup(self, worker_id: int, followup_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM followups WHERE id=? AND worker_id=?",
+                (followup_id, worker_id)).fetchone()
+        if row is None:
+            raise NotFoundError("复诊记录不存在")
+        return dict(row)
+
+    def update_followup(self, worker_id: int, followup_id: int,
+                        fields: Dict[str, Any]) -> Dict[str, Any]:
+        assignments = ", ".join(f"{key}=?" for key in fields)
+        params = list(fields.values()) + [followup_id, worker_id]
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                f"UPDATE followups SET {assignments} WHERE id=? AND worker_id=?", params)
+            if cur.rowcount == 0:
+                raise NotFoundError("复诊记录不存在")
+        return self.get_followup(worker_id, followup_id)
+
+    def list_followups(self, worker_id: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM followups WHERE worker_id=? ORDER BY visit_date, id",
+                (worker_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_confirmation(self, worker_id: int, role: str, actor: str) -> Dict[str, Any]:
+        now = utc_now()
+        self.get_worker(worker_id)
+        try:
+            with self._lock, self.conn:
+                cur = self.conn.execute(
+                    """INSERT INTO clearance_confirmations(worker_id, confirmer_role, actor,
+                       created_at) VALUES(?,?,?,?)""",
+                    (worker_id, role, actor, now),
+                )
+                confirmation_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("该角色已确认，不能重复确认") from exc
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM clearance_confirmations WHERE id=?",
+                (confirmation_id,)).fetchone()
+        return dict(row)
+
+    def list_confirmations(self, worker_id: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM clearance_confirmations WHERE worker_id=? ORDER BY id",
+                (worker_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_confirmations(self, worker_id: int) -> int:
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM clearance_confirmations WHERE worker_id=?", (worker_id,))
+        return int(cur.rowcount)
 
     def append_audit(self, action: str, entity_type: str, entity_id: int,
                      actor: str, detail: dict) -> Dict[str, Any]:

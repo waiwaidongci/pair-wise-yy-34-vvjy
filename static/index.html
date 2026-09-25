@@ -1,1 +1,213 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工伤事故调查与纠正措施</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#17212b}pre{background:#f4f7f9;padding:1rem;overflow:auto}button{padding:.55rem 1rem}</style></head><body><h1>工伤事故调查与纠正措施</h1><p>记录工伤经过、伤害、现场和证人，维护调查、纠正措施、验证与关闭流程</p><p>严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。</p><button onclick="loadItems()">刷新列表</button><pre id="out">使用X-Actor和X-Role请求头调用接口。</pre><script>async function loadItems(){const r=await fetch('/api/items',{headers:{'X-Actor':'demo','X-Role':'viewer'}});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工伤事故调查与纠正措施</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#17212b}
+h1{font-size:1.4rem}h2{font-size:1.1rem;margin:1.6rem 0 .6rem;border-left:4px solid #2f6feb;padding-left:.5rem}
+fieldset{border:1px solid #d5dde5;border-radius:8px;margin:.8rem 0;padding:.8rem}
+legend{font-weight:600;padding:0 .4rem}
+label{display:inline-block;margin:.3rem .8rem .3rem 0;font-size:.9rem}
+input,select{padding:.35rem .45rem;border:1px solid #b9c4cf;border-radius:6px;font-size:.9rem}
+button{padding:.45rem .9rem;border:1px solid #2f6feb;background:#2f6feb;color:#fff;border-radius:6px;cursor:pointer;font-size:.9rem}
+button.ghost{background:#fff;color:#2f6feb}
+button.warn{background:#b35900;border-color:#b35900}
+button:disabled{opacity:.45;cursor:not-allowed}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{border:1px solid #d5dde5;padding:.35rem .5rem;text-align:left;vertical-align:top}
+th{background:#f4f7f9}
+.group{border:1px solid #d5dde5;border-radius:8px;margin:.8rem 0}
+.group>header{padding:.5rem .8rem;font-weight:600;background:#f4f7f9;border-radius:8px 8px 0 0}
+.group.g1>header{background:#fff4e0}.group.g2>header{background:#e8f0fe}.group.g3>header{background:#e6f6e6}.group.g4>header{background:#eef1f4}
+.card{padding:.6rem .8rem;border-top:1px solid #e3e9ef;font-size:.88rem}
+.card .meta{color:#5a6a7a}.card .actions{margin-top:.4rem;display:flex;gap:.4rem;flex-wrap:wrap}
+.tag{display:inline-block;padding:.05rem .45rem;border-radius:10px;background:#eef1f4;margin-right:.3rem;font-size:.8rem}
+.tag.sev-severe{background:#f8d7da}.tag.sev-moderate{background:#fff3cd}.tag.sev-minor{background:#e6f6e6}
+.msg{padding:.5rem .8rem;border-radius:6px;margin:.6rem 0;display:none}
+.msg.err{display:block;background:#f8d7da;color:#842029}.msg.ok{display:block;background:#d1e7dd;color:#0f5132}
+.followups{margin:.3rem 0 0;padding-left:1.1rem;color:#37475a}
+pre{background:#f4f7f9;padding:1rem;overflow:auto;font-size:.8rem}
+</style>
+</head>
+<body>
+<h1>工伤事故调查与纠正措施 · 伤者台账</h1>
+<p>登记伤者姓名编号、岗位、伤部、首诊日与预计返岗日；复诊记录活动能力、限制与医生意见。伤情严重、复诊未到或活动能力不达标的伤者只能保持待返岗；返岗许可须安全员与班组长分别确认，且两次确认不得为同一人。事故进入验证前，所有伤者须有最终返岗或长期限制结论；关档后修改伤情或复诊资料，原许可作废并回到待处理。</p>
+
+<fieldset><legend>当前身份</legend>
+<label>姓名 <input id="actor" value="安全员甲"></label>
+<label>角色 <select id="role">
+<option value="safety_manager">安全员 safety_manager</option>
+<option value="team_leader">班组长 team_leader</option>
+<option value="investigator">调查员 investigator</option>
+<option value="reporter">报告人 reporter</option>
+<option value="viewer">访客 viewer</option>
+</select></label>
+</fieldset>
+<div id="msg" class="msg"></div>
+
+<h2>事故</h2>
+<button class="ghost" onclick="loadItems()">刷新事故</button>
+<table id="itemTable"><thead><tr><th>ID</th><th>标题</th><th>严重度</th><th>状态</th></tr></thead><tbody></tbody></table>
+
+<fieldset><legend>登记伤者（安全员）</legend>
+<label>事故 <select id="wItem"></select></label>
+<label>姓名 <input id="wName"></label>
+<label>编号 <input id="wNo"></label>
+<label>岗位 <input id="wPos"></label>
+<label>伤部 <input id="wPart"></label>
+<label>伤情 <select id="wSev"><option value="minor">轻微</option><option value="moderate">中等</option><option value="severe">严重</option></select></label>
+<label>首诊日 <input id="wFirst" type="date"></label>
+<label>预计返岗日 <input id="wExpect" type="date"></label>
+<button onclick="registerWorker()">登记</button>
+</fieldset>
+
+<fieldset><legend>登记复诊（安全员）— 先点伤者卡片上的「登记复诊」</legend>
+<label>伤者 <input id="fWorker" readonly placeholder="未选择" style="width:14rem"></label>
+<label>复诊日 <input id="fDate" type="date"></label>
+<label>活动能力 <select id="fActivity"><option value="full">正常</option><option value="partial">部分</option><option value="limited">受限（不达标）</option></select></label>
+<label>限制 <input id="fRestrict" placeholder="无"></label>
+<label>医生意见 <input id="fOpinion"></label>
+<button onclick="addFollowup()">提交复诊</button>
+</fieldset>
+
+<fieldset><legend>修改伤情资料（安全员，关档后修改将作废原许可）— 点伤者卡片上的「改伤情」</legend>
+<label>伤者 <input id="eWorker" readonly placeholder="未选择" style="width:14rem"></label>
+<label>伤情 <select id="eSev"><option value="">（不改）</option><option value="minor">轻微</option><option value="moderate">中等</option><option value="severe">严重</option></select></label>
+<label>预计返岗日 <input id="eExpect" type="date"></label>
+<button onclick="updateWorker()">保存修改</button>
+</fieldset>
+
+<h2>伤者台账</h2>
+<fieldset><legend>筛选</legend>
+<label>岗位 <input id="qPos" placeholder="如：冲压工"></label>
+<label>事故状态 <select id="qStatus">
+<option value="">全部</option>
+<option value="reported">已报告</option>
+<option value="investigating">调查中</option>
+<option value="corrective_action">纠正措施</option>
+<option value="verification">验证</option>
+<option value="closed">已关档</option>
+</select></label>
+<button class="ghost" onclick="loadLedger()">查询</button>
+</fieldset>
+<div id="ledger"></div>
+
+<script>
+const ITEM_STATUS={reported:'已报告',investigating:'调查中',corrective_action:'纠正措施',verification:'验证',closed:'已关档'};
+const WORKER_STATUS={pending_followup:'待复诊',pending_clearance:'待许可',cleared:'可返岗',returned:'最终返岗',restricted:'长期限制'};
+const GROUPS=[['pending_followup','待复诊','g1'],['pending_clearance','待许可','g2'],['cleared','可返岗','g3'],['returned','最终返岗','g4'],['restricted','长期限制','g4']];
+const SEV={minor:'轻微',moderate:'中等',severe:'严重'};
+const ACT={limited:'受限',partial:'部分',full:'正常'};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function headers(){return {'X-Actor':$('actor').value.trim()||'demo','X-Role':$('role').value,'Content-Type':'application/json'};}
+function show(text,ok){const m=$('msg');m.textContent=text;m.className='msg '+(ok?'ok':'err');}
+async function api(method,url,body){
+  const r=await fetch(url,{method,headers:headers(),body:body?JSON.stringify(body):undefined});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.message||('HTTP '+r.status));
+  return data;
+}
+async function run(fn){try{await fn();}catch(e){show(e.message,false);}}
+
+async function loadItems(){
+  const data=await api('GET','/api/items');
+  const tb=$('itemTable').querySelector('tbody');tb.innerHTML='';
+  const sel=$('wItem');sel.innerHTML='';
+  for(const it of data.items){
+    tb.insertAdjacentHTML('beforeend',`<tr><td>${it.id}</td><td>${esc(it.title)}</td><td>${esc(it.severity)}</td><td>${ITEM_STATUS[it.status]||it.status}</td></tr>`);
+    sel.insertAdjacentHTML('beforeend',`<option value="${it.id}">#${it.id} ${esc(it.title)}（${ITEM_STATUS[it.status]||it.status}）</option>`);
+  }
+}
+
+async function registerWorker(){
+  await run(async()=>{
+    const body={worker_name:$('wName').value,worker_no:$('wNo').value,position:$('wPos').value,
+      body_part:$('wPart').value,injury_severity:$('wSev').value,
+      first_visit_date:$('wFirst').value,expected_return_date:$('wExpect').value};
+    const w=await api('POST',`/api/items/${$('wItem').value}/workers`,body);
+    show(`已登记伤者 ${w.worker_name}（${w.worker_no}），状态：${WORKER_STATUS[w.status]}`,true);
+    loadLedger();
+  });
+}
+
+function pickFollowup(w){$('fWorker').value=`#${w.id} ${w.worker_name}`;$('fWorker').dataset.id=w.id;$('fWorker').dataset.item=w.item_id;}
+function pickEdit(w){$('eWorker').value=`#${w.id} ${w.worker_name}`;$('eWorker').dataset.id=w.id;$('eWorker').dataset.item=w.item_id;$('eExpect').value=w.expected_return_date;}
+
+async function addFollowup(){
+  await run(async()=>{
+    const t=$('fWorker');if(!t.dataset.id)throw new Error('请先在伤者卡片上点「登记复诊」');
+    const body={visit_date:$('fDate').value,activity_level:$('fActivity').value,
+      restrictions:$('fRestrict').value||'无',doctor_opinion:$('fOpinion').value};
+    await api('POST',`/api/items/${t.dataset.item}/workers/${t.dataset.id}/followups`,body);
+    show('复诊已登记，许可状态已重算',true);loadLedger();
+  });
+}
+
+async function updateWorker(){
+  await run(async()=>{
+    const t=$('eWorker');if(!t.dataset.id)throw new Error('请先在伤者卡片上点「改伤情」');
+    const body={};if($('eSev').value)body.injury_severity=$('eSev').value;
+    if($('eExpect').value)body.expected_return_date=$('eExpect').value;
+    const w=await api('PUT',`/api/items/${t.dataset.item}/workers/${t.dataset.id}`,body);
+    show(`伤情已修改，原许可作废，当前状态：${WORKER_STATUS[w.status]}`,true);loadLedger();
+  });
+}
+
+async function confirmClearance(w){
+  await run(async()=>{
+    const r=await api('POST',`/api/items/${w.item_id}/workers/${w.id}/confirm`);
+    show(`确认成功，${w.worker_name} 当前状态：${WORKER_STATUS[r.status]}`,true);loadLedger();
+  });
+}
+
+async function conclude(w,conclusion){
+  await run(async()=>{
+    const r=await api('POST',`/api/items/${w.item_id}/workers/${w.id}/conclusion`,{conclusion});
+    show(`已登记结论：${WORKER_STATUS[r.status]}`,true);loadLedger();
+  });
+}
+
+function card(w){
+  const confs=w.confirmations.map(c=>`<span class="tag">${c.confirmer_role==='safety_manager'?'安全员':'班组长'}：${esc(c.actor)}</span>`).join('')||'<span class="meta">尚无确认</span>';
+  const fus=w.followups.map(f=>`<li>${esc(f.visit_date)} 活动能力：${ACT[f.activity_level]||f.activity_level}；限制：${esc(f.restrictions)}；医生意见：${esc(f.doctor_opinion)}</li>`).join('');
+  const acts=[];
+  acts.push(`<button class="ghost" onclick='pickFollowup(${JSON.stringify(w)})'>登记复诊</button>`);
+  acts.push(`<button class="ghost" onclick='pickEdit(${JSON.stringify(w)})'>改伤情</button>`);
+  if(w.status==='pending_clearance')acts.push(`<button onclick='confirmClearance(${JSON.stringify(w)})'>确认许可（安全员/班组长）</button>`);
+  if(w.status==='cleared')acts.push(`<button onclick='conclude(${JSON.stringify(w)},"returned")'>最终返岗</button>`);
+  if(!['returned','restricted'].includes(w.status))acts.push(`<button class="warn" onclick='conclude(${JSON.stringify(w)},"restricted")'>长期限制</button>`);
+  return `<div class="card">
+    <b>${esc(w.worker_name)}</b>（编号 ${esc(w.worker_no)}）
+    <span class="tag sev-${esc(w.injury_severity)}">伤情：${SEV[w.injury_severity]||w.injury_severity}</span>
+    <span class="tag">岗位：${esc(w.position)}</span>
+    <span class="tag">伤部：${esc(w.body_part)}</span>
+    <div class="meta">事故 #${w.item_id} ${esc(w.item_title||'')}（${ITEM_STATUS[w.item_status]||w.item_status||''}） · 首诊 ${esc(w.first_visit_date)} · 预计返岗 ${esc(w.expected_return_date)} · 许可条件${w.clearance_eligible?'已满足':'未满足'}</div>
+    <div>确认：${confs}</div>
+    ${fus?`<ul class="followups">${fus}</ul>`:'<div class="meta">尚无复诊记录</div>'}
+    <div class="actions">${acts.join('')}</div>
+  </div>`;
+}
+
+async function loadLedger(){
+  await run(async()=>{
+    const q=new URLSearchParams();
+    if($('qPos').value.trim())q.set('position',$('qPos').value.trim());
+    if($('qStatus').value)q.set('item_status',$('qStatus').value);
+    const data=await api('GET','/api/workers?'+q.toString());
+    const box=$('ledger');box.innerHTML='';
+    for(const [key,label,cls] of GROUPS){
+      const list=data.groups[key]||[];
+      box.insertAdjacentHTML('beforeend',
+        `<div class="group ${cls}"><header>${label}（${list.length}）</header>${list.map(card).join('')||'<div class="card meta">无</div>'}</div>`);
+    }
+    show('台账已刷新',true);
+  });
+}
+
+loadItems().then(loadLedger).catch(e=>show(e.message,false));
+</script>
+</body>
+</html>

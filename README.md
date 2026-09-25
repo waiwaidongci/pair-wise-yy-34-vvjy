@@ -32,7 +32,19 @@ python3 app.py --db ./data.db --port 8311
 - `POST /api/items/{id}/transition`，必须提交`expected_version`
 - `GET /api/audit`
 
-允许角色：reporter, investigator, safety_manager, viewer。严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。
+允许角色：reporter, investigator, safety_manager, team_leader, viewer。严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。
+
+## 伤者台账
+
+- `POST /api/items/{id}/workers`：登记伤者（姓名、编号、岗位、伤部、伤情、首诊日、预计返岗日），仅安全员。
+- `GET /api/items/{id}/workers`：查看某事故的伤者台账。
+- `GET /api/workers?position=&item_status=`：跨事故台账，按待复诊、待许可、可返岗、最终返岗、长期限制分组，可按岗位和事故状态筛选。
+- `POST /api/items/{id}/workers/{wid}/followups`：登记复诊（活动能力、限制、医生意见）。
+- `PUT /api/items/{id}/workers/{wid}`：修改伤情资料；`PUT /api/items/{id}/workers/{wid}/followups/{fid}`：修改复诊资料。修改后原许可作废、状态重算并回到待处理。
+- `POST /api/items/{id}/workers/{wid}/confirm`：返岗许可确认，须安全员与班组长分别确认，同一伤者的两次确认不得为同一人。
+- `POST /api/items/{id}/workers/{wid}/conclusion`：登记最终结论（`returned`最终返岗 / `restricted`长期限制）。
+
+规则：伤情严重、复诊未到或活动能力不达标（`limited`）的伤者只能保持待返岗；最终返岗须先获得返岗许可；事故进入`verification`前，所有伤者必须有最终返岗或长期限制结论；已关档后修改伤情或复诊资料，原许可作废并回到待处理。
 
 ## 测试
 

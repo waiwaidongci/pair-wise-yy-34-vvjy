@@ -2,7 +2,9 @@ from __future__ import annotations
 from .domain import ConflictError, ValidationError
 TITLE='工伤事故调查与纠正措施'; ENTITY='事故'; ID_PREFIX='OI'
 SEVERITIES=['minor', 'moderate', 'serious', 'fatal']; STATES=['reported', 'investigating', 'corrective_action', 'verification', 'closed']; TRANSITIONS={'reported': ['investigating'], 'investigating': ['corrective_action'], 'corrective_action': ['verification'], 'verification': ['closed'], 'closed': []}; TRANSITION_ROLES={'investigating': ['investigator'], 'corrective_action': ['investigator'], 'verification': ['safety_manager'], 'closed': ['safety_manager']}
-CREATE_ROLES=set(['reporter', 'investigator']); RECORD_ROLES=set(['investigator', 'safety_manager']); AUDIT_ROLES=set(['safety_manager', 'viewer']); VIEW_ROLES=set(['reporter', 'investigator', 'safety_manager', 'viewer'])
+CREATE_ROLES=set(['reporter', 'investigator']); RECORD_ROLES=set(['investigator', 'safety_manager']); AUDIT_ROLES=set(['safety_manager', 'viewer']); VIEW_ROLES=set(['reporter', 'investigator', 'safety_manager', 'team_leader', 'viewer'])
+INJURY_SEVERITIES=['minor', 'moderate', 'severe']; ACTIVITY_LEVELS=['limited', 'partial', 'full']; WORKER_STATES=['pending_followup', 'pending_clearance', 'cleared', 'returned', 'restricted']; FINAL_WORKER_STATES=set(['returned', 'restricted']); CLEARANCE_ROLES=['safety_manager', 'team_leader']
+WORKER_ROLES=set(['safety_manager']); FOLLOWUP_ROLES=set(['safety_manager']); CONCLUSION_ROLES=set(['safety_manager']); STANDARD_ACTIVITY=set(['partial', 'full'])
 SEVERITY_WEIGHT={'minor': 1.0, 'moderate': 3.0, 'serious': 6.0, 'fatal': 9.0}; DEADLINE_HOURS={'minor': 72, 'moderate': 24, 'serious': 8, 'fatal': 4}; TERMINAL_STATES=set(['closed'])
 def priority_score(severity,quantity=0.0,threshold=1.0,open_records=0):
     if severity not in SEVERITY_WEIGHT: raise ValidationError("unknown severity")
@@ -20,3 +22,16 @@ def validate_transition(current,target):
     if not can_transition(current,target): raise ConflictError(f"不能从{current}转换到{target}")
 def completion_blockers(target,open_records): return ["仍有未关闭事项"] if target in TERMINAL_STATES and open_records>0 else []
 def role_for_transition(target): return set(TRANSITION_ROLES.get(target,[]))
+def activity_meets_standard(level): return level in STANDARD_ACTIVITY
+def clearance_eligible(injury_severity,followups):
+    if not followups or injury_severity=='severe': return False
+    return activity_meets_standard(followups[-1]['activity_level'])
+def derive_worker_status(injury_severity,followups,confirmations):
+    if not clearance_eligible(injury_severity,followups): return WORKER_STATES[0]
+    confirmed=set(c['confirmer_role'] for c in confirmations)
+    if all(role in confirmed for role in CLEARANCE_ROLES): return 'cleared'
+    return 'pending_clearance'
+def verification_blockers(workers,target):
+    if target!='verification': return []
+    pending=[w for w in workers if w['status'] not in FINAL_WORKER_STATES]
+    return [f"仍有{len(pending)}名伤者缺少最终返岗或长期限制结论"] if pending else []
