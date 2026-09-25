@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .audit import make_entry, utc_now
 from .domain import ConflictError, NotFoundError
@@ -65,6 +65,41 @@ class Repository:
                     entry_hash TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS workers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    badge TEXT NOT NULL,
+                    position TEXT NOT NULL,
+                    injury_part TEXT NOT NULL,
+                    serious INTEGER NOT NULL DEFAULT 0,
+                    first_visit_date TEXT NOT NULL,
+                    expected_return_date TEXT NOT NULL,
+                    conclusion TEXT,
+                    conclusion_remark TEXT,
+                    permit_voided INTEGER NOT NULL DEFAULT 0,
+                    safety_actor TEXT,
+                    safety_confirmed_at TEXT,
+                    foreman_actor TEXT,
+                    foreman_confirmed_at TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(item_id, badge)
+                );
+                CREATE TABLE IF NOT EXISTS follow_ups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    worker_id INTEGER NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+                    visit_date TEXT NOT NULL,
+                    mobility TEXT NOT NULL,
+                    restrictions TEXT NOT NULL,
+                    doctor_opinion TEXT NOT NULL,
+                    next_visit_date TEXT,
+                    created_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_workers_item ON workers(item_id);
+                CREATE INDEX IF NOT EXISTS ix_followups_worker ON follow_ups(worker_id);
             """)
 
     @staticmethod
@@ -156,6 +191,184 @@ class Repository:
                 (item_id,),
             ).fetchone()
         return int(row["n"])
+
+    def create_worker(self, item_id: int, name: str, badge: str, position: str,
+                      injury_part: str, serious: int, first_visit_date: str,
+                      expected_return_date: str, actor: str) -> Dict[str, Any]:
+        now = utc_now()
+        try:
+            with self._lock, self.conn:
+                cur = self.conn.execute(
+                    """INSERT INTO workers(item_id, name, badge, position, injury_part,
+                       serious, first_visit_date, expected_return_date,
+                       created_by, created_at, updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (item_id, name, badge, position, injury_part, serious,
+                     first_visit_date, expected_return_date, actor, now, now),
+                )
+                worker_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError("同一事故下员工编号已存在") from exc
+        return self.get_worker(worker_id)
+
+    WORKER_FIELDS = ("name", "badge", "position", "injury_part", "serious",
+                     "first_visit_date", "expected_return_date")
+
+    def update_worker_fields(self, worker_id: int, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """更新伤者登记资料；伤情相关字段变化时许可作废，事故已关档则回到待处理。"""
+        medical_fields = ("injury_part", "serious", "first_visit_date",
+                          "expected_return_date")
+        columns = ",".join(f"{k}=?" for k in self.WORKER_FIELDS)
+        values = [changes[k] for k in self.WORKER_FIELDS] + [utc_now(), worker_id]
+        with self._lock, self.conn:
+            before = self.conn.execute(
+                "SELECT * FROM workers WHERE id=?", (worker_id,)
+            ).fetchone()
+            if before is None:
+                raise NotFoundError("伤者不存在")
+            medical_changed = any(before[k] != changes[k] for k in medical_fields)
+            self.conn.execute(
+                f"UPDATE workers SET {columns}, updated_at=? WHERE id=?", values)
+            reopened = False
+            if medical_changed and not before["permit_voided"]:
+                self.conn.execute(
+                    """UPDATE workers SET permit_voided=1, safety_actor=NULL,
+                       safety_confirmed_at=NULL, foreman_actor=NULL,
+                       foreman_confirmed_at=NULL, conclusion=NULL,
+                       conclusion_remark=NULL WHERE id=?""",
+                    (worker_id,),
+                )
+                item = self.conn.execute(
+                    "SELECT status FROM items WHERE id=?", (before["item_id"],)
+                ).fetchone()
+                if item["status"] == "closed":
+                    self.conn.execute(
+                        """UPDATE items SET status='corrective_action',
+                           version=version+1, updated_at=? WHERE id=?""",
+                        (utc_now(), before["item_id"]),
+                    )
+                    reopened = True
+        return self.get_worker(worker_id), reopened, medical_changed
+
+    def get_worker(self, worker_id: int) -> Dict[str, Any]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM workers WHERE id=?", (worker_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("伤者不存在")
+        return dict(row)
+
+    def list_workers_for_item(self, item_id: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM workers WHERE item_id=? ORDER BY id", (item_id,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_all_workers(self, position: Optional[str] = None,
+                         status: Optional[str] = None) -> List[Dict[str, Any]]:
+        sql = "SELECT w.* FROM workers w JOIN items i ON w.item_id=i.id"
+        clauses = []
+        params: List[Any] = []
+        if position:
+            clauses.append("w.position LIKE ?")
+            params.append(f"%{position}%")
+        if status:
+            clauses.append("i.status=?")
+            params.append(status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY w.item_id DESC, w.id"
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_follow_ups(self, worker_id: int) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM follow_ups WHERE worker_id=? ORDER BY visit_date, id",
+                (worker_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_follow_up(self, worker_id: int, visit_date: str, mobility: str,
+                      restrictions: str, doctor_opinion: str,
+                      next_visit_date: Optional[str], actor: str
+                      ) -> Tuple[Dict[str, Any], bool]:
+        """登记复诊；新复诊资料使原许可作废，事故已关档则回到待处理。"""
+        now = utc_now()
+        with self._lock, self.conn:
+            worker = self.conn.execute(
+                "SELECT * FROM workers WHERE id=?", (worker_id,)
+            ).fetchone()
+            if worker is None:
+                raise NotFoundError("伤者不存在")
+            cur = self.conn.execute(
+                """INSERT INTO follow_ups(worker_id, visit_date, mobility, restrictions,
+                   doctor_opinion, next_visit_date, created_by, created_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (worker_id, visit_date, mobility, restrictions, doctor_opinion,
+                 next_visit_date, actor, now),
+            )
+            followup_id = int(cur.lastrowid)
+            reopened = False
+            if not worker["permit_voided"] and (worker["safety_actor"]
+                                                or worker["foreman_actor"]
+                                                or worker["conclusion"]):
+                self.conn.execute(
+                    """UPDATE workers SET permit_voided=1, safety_actor=NULL,
+                       safety_confirmed_at=NULL, foreman_actor=NULL,
+                       foreman_confirmed_at=NULL, conclusion=NULL,
+                       conclusion_remark=NULL, updated_at=? WHERE id=?""",
+                    (now, worker_id),
+                )
+                item = self.conn.execute(
+                    "SELECT status FROM items WHERE id=?", (worker["item_id"],)
+                ).fetchone()
+                if item["status"] == "closed":
+                    self.conn.execute(
+                        """UPDATE items SET status='corrective_action',
+                           version=version+1, updated_at=? WHERE id=?""",
+                        (now, worker["item_id"]),
+                    )
+                    reopened = True
+            row = self.conn.execute(
+                "SELECT * FROM follow_ups WHERE id=?", (followup_id,)
+            ).fetchone()
+        return dict(row), reopened
+
+    def confirm_permit(self, worker_id: int, slot: str, actor: str) -> Dict[str, Any]:
+        """在对应确认槽位写入确认人；安全员与班组长不能是同一人。"""
+        now = utc_now()
+        with self._lock, self.conn:
+            worker = self.conn.execute(
+                "SELECT * FROM workers WHERE id=?", (worker_id,)
+            ).fetchone()
+            if worker is None:
+                raise NotFoundError("伤者不存在")
+            other = "foreman" if slot == "safety" else "safety"
+            other_actor = worker[f"{other}_actor"]
+            if other_actor and other_actor == actor:
+                raise ConflictError("安全员和班组长的两份确认不能是同一人")
+            self.conn.execute(
+                f"UPDATE workers SET {slot}_actor=?, {slot}_confirmed_at=?, "
+                "permit_voided=0, updated_at=? WHERE id=?",
+                (actor, now, now, worker_id),
+            )
+        return self.get_worker(worker_id)
+
+    def set_conclusion(self, worker_id: int, conclusion: str,
+                       remark: str) -> Dict[str, Any]:
+        with self._lock, self.conn:
+            cur = self.conn.execute(
+                """UPDATE workers SET conclusion=?, conclusion_remark=?, updated_at=?
+                   WHERE id=?""",
+                (conclusion, remark, utc_now(), worker_id),
+            )
+            if cur.rowcount == 0:
+                raise NotFoundError("伤者不存在")
+        return self.get_worker(worker_id)
 
     def append_audit(self, action: str, entity_type: str, entity_id: int,
                      actor: str, detail: dict) -> Dict[str, Any]:

@@ -32,7 +32,30 @@ python3 app.py --db ./data.db --port 8311
 - `POST /api/items/{id}/transition`，必须提交`expected_version`
 - `GET /api/audit`
 
-允许角色：reporter, investigator, safety_manager, viewer。严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。
+允许角色：reporter, investigator, safety_manager, foreman, viewer。严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。
+
+## 伤者台账
+
+事故内嵌伤者台账，防止事故在伤者未结案前提前关档。
+
+- 登记伤者：姓名、编号、岗位、伤部、是否伤情严重、首诊日、预计返岗日。
+- 复诊记录：就诊日、活动能力（restricted/partial/full）、岗位限制、医生意见、下次复诊日。
+- 待返岗判定（满足任一即保持待返岗）：伤情严重、无复诊、复诊到期未完成、最近复诊活动能力不是full。
+- 返岗许可必须由安全员（safety_manager）和班组长（foreman）分别确认，两份确认不能是同一人。
+- 最终结论为“返岗(returned)”或“长期限制(long_term_restriction)”；伤情严重时只能下长期限制结论。事故进入verification前，所有伤者必须有最终结论。
+- 已关档事故再修改伤情资料或补充复诊，原许可与结论作废，事故自动回到corrective_action（待处理）。
+- 台账按待复诊、待许可、可返岗分组，支持按岗位和事故状态筛选。
+
+接口：
+
+- `POST /api/items/{id}/workers`（investigator, safety_manager）
+- `GET /api/items/{id}/workers`
+- `PATCH /api/workers/{id}`（investigator, safety_manager）
+- `POST /api/workers/{id}/followups`（investigator, safety_manager）
+- `POST /api/workers/{id}/confirmations`，body含`slot=safety|foreman`，分别需safety_manager、foreman
+- `POST /api/workers/{id}/conclusion`（investigator, safety_manager）
+- `GET /api/workers/{id}`
+- `GET /api/workers?position=&item_status=`，返回三个分组
 
 ## 测试
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, Optional
 class ErrorKind:
     VALIDATION="validation"; NOT_FOUND="not_found"; FORBIDDEN="forbidden"; CONFLICT="conflict"
@@ -10,7 +11,10 @@ class ValidationError(DomainError): kind=ErrorKind.VALIDATION
 class NotFoundError(DomainError): kind=ErrorKind.NOT_FOUND
 class PermissionDenied(DomainError): kind=ErrorKind.FORBIDDEN
 class ConflictError(DomainError): kind=ErrorKind.CONFLICT
-SEVERITIES=['minor', 'moderate', 'serious', 'fatal']; STATES=['reported', 'investigating', 'corrective_action', 'verification', 'closed']; ROLES=['reporter', 'investigator', 'safety_manager', 'viewer']
+SEVERITIES=['minor', 'moderate', 'serious', 'fatal']; STATES=['reported', 'investigating', 'corrective_action', 'verification', 'closed']; ROLES=['reporter', 'investigator', 'safety_manager', 'foreman', 'viewer']
+MOBILITY_LEVELS=['restricted', 'partial', 'full']
+WORKER_CONCLUSIONS=['returned', 'long_term_restriction']
+CONFIRM_SLOTS=['safety', 'foreman']
 @dataclass(frozen=True)
 class Item:
     id:int; title:str; description:str; severity:str; quantity:float; threshold:float; status:str; version:int; external_ref:Optional[str]; created_by:str; created_at:str; updated_at:str
@@ -36,3 +40,18 @@ def require_number(value,field,minimum=0.0):
     return number
 def ensure_role(role,allowed):
     if role not in allowed: raise PermissionDenied("当前角色无权执行该操作")
+def require_date(value,field):
+    value=require_text(value,field,10)
+    try: datetime.strptime(value,"%Y-%m-%d")
+    except ValueError: raise ValidationError(f"{field}必须是YYYY-MM-DD日期")
+    return value
+def optional_date(value,field):
+    if value in (None,""): return None
+    return require_date(value,field)
+def require_choice(value,field,choices):
+    value=require_text(value,field,40)
+    if value not in choices: raise ValidationError(f"{field}不在允许范围内")
+    return value
+def require_bool(value,field):
+    if not isinstance(value,bool): raise ValidationError(f"{field}必须是布尔值")
+    return 1 if value else 0

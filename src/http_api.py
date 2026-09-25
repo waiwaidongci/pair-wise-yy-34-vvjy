@@ -75,7 +75,9 @@ def make_handler(service: Service, static_dir: str):
 
         def do_GET(self) -> None:
             try:
-                path = urlparse(self.path).path
+                parsed = urlparse(self.path)
+                path = parsed.path
+                query = parse_qs(parsed.query)
                 if path == "/health":
                     self._json(200, {"status": "ok"})
                 elif path == "/":
@@ -83,12 +85,34 @@ def make_handler(service: Service, static_dir: str):
                 elif path == "/api/items":
                     actor, role = self._identity()
                     del actor
-                    self._json(200, {"items": service.list_items(role)})
+                    status = query.get("status", [None])[0]
+                    self._json(200, {"items": service.list_items(role, status)})
+                elif path == "/api/workers":
+                    actor, role = self._identity()
+                    del actor
+                    position = query.get("position", [None])[0]
+                    item_status = query.get("item_status", [None])[0]
+                    self._json(200, service.worker_board(role, position, item_status))
                 elif path.startswith("/api/items/") and path.endswith("/records"):
                     item_id = int(path.split("/")[3])
                     actor, role = self._identity()
                     del actor
                     self._json(200, {"records": service.list_records(item_id, role)})
+                elif path.startswith("/api/items/") and path.endswith("/workers"):
+                    item_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"workers": service.list_workers(item_id, role)})
+                elif path.startswith("/api/workers/") and path.endswith("/followups"):
+                    worker_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_worker(worker_id, role))
+                elif path.startswith("/api/workers/"):
+                    worker_id = int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_worker(worker_id, role))
                 elif path.startswith("/api/items/"):
                     item_id = int(path.rsplit("/", 1)[-1])
                     actor, role = self._identity()
@@ -113,12 +137,37 @@ def make_handler(service: Service, static_dir: str):
                 elif path.startswith("/api/items/") and path.endswith("/records"):
                     item_id = int(path.split("/")[3])
                     self._json(201, service.add_record(item_id, body, actor, role))
+                elif path.startswith("/api/items/") and path.endswith("/workers"):
+                    item_id = int(path.split("/")[3])
+                    self._json(201, service.register_worker(item_id, body, actor, role))
+                elif path.startswith("/api/workers/") and path.endswith("/followups"):
+                    worker_id = int(path.split("/")[3])
+                    self._json(201, service.add_follow_up(worker_id, body, actor, role))
+                elif path.startswith("/api/workers/") and path.endswith("/confirmations"):
+                    worker_id = int(path.split("/")[3])
+                    self._json(200, service.confirm_return(worker_id, body, actor, role))
+                elif path.startswith("/api/workers/") and path.endswith("/conclusion"):
+                    worker_id = int(path.split("/")[3])
+                    self._json(200, service.conclude_worker(worker_id, body, actor, role))
                 elif path.startswith("/api/items/") and path.endswith("/transition"):
                     item_id = int(path.split("/")[3])
                     target = body.get("target")
                     expected = body.get("expected_version")
                     self._json(200, service.transition(
                         item_id, target, expected, actor, role))
+                else:
+                    self._json(404, {"error": "not_found"})
+            except Exception as exc:
+                self._send_error(exc)
+
+        def do_PATCH(self) -> None:
+            try:
+                path = urlparse(self.path).path
+                actor, role = self._identity()
+                body = self._body()
+                if path.startswith("/api/workers/"):
+                    worker_id = int(path.rsplit("/", 1)[-1])
+                    self._json(200, service.update_worker(worker_id, body, actor, role))
                 else:
                     self._json(404, {"error": "not_found"})
             except Exception as exc:

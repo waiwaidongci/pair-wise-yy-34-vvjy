@@ -1,1 +1,133 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工伤事故调查与纠正措施</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#17212b}pre{background:#f4f7f9;padding:1rem;overflow:auto}button{padding:.55rem 1rem}</style></head><body><h1>工伤事故调查与纠正措施</h1><p>记录工伤经过、伤害、现场和证人，维护调查、纠正措施、验证与关闭流程</p><p>严重度越高、伤害指数越大或未关闭措施越多，优先级越高；严重事故必须在4小时内启动调查。</p><button onclick="loadItems()">刷新列表</button><pre id="out">使用X-Actor和X-Role请求头调用接口。</pre><script>async function loadItems(){const r=await fetch('/api/items',{headers:{'X-Actor':'demo','X-Role':'viewer'}});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工伤事故伤者台账</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f2f5f8;color:#17212b}
+header{background:#10324f;color:#fff;padding:1rem 1.5rem}
+header h1{margin:0;font-size:1.2rem}
+.bar{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;padding:.8rem 1.5rem;background:#fff;border-bottom:1px solid #d8e0e7}
+input,select,button{font-size:.9rem;padding:.4rem .55rem;border:1px solid #b9c5cf;border-radius:5px}
+button{cursor:pointer;background:#1d6fa5;color:#fff;border-color:#1d6fa5}
+button.ghost{background:#fff;color:#1d6fa5}
+button:disabled{opacity:.45;cursor:not-allowed}
+main{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;padding:1rem 1.5rem}
+section.col{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:.8rem;min-height:200px}
+section.col h2{font-size:1rem;margin:0 0 .6rem;display:flex;justify-content:space-between}
+.card{border:1px solid #d8e0e7;border-radius:6px;padding:.6rem;margin-bottom:.6rem;font-size:.85rem}
+.card .name{font-weight:700;font-size:.95rem}
+.card .meta{color:#54636e;margin:.25rem 0}
+.tag{display:inline-block;font-size:.72rem;padding:.05rem .4rem;border-radius:10px;margin-right:.3rem}
+.tag.serious{background:#fdecea;color:#b3261e}
+.tag.ltr{background:#fff4e0;color:#9a6200}
+.tag.returned{background:#e6f4ea;color:#1e6b33}
+.tag.block{background:#fdecea;color:#b3261e}
+.actions{margin-top:.5rem;display:flex;flex-wrap:wrap;gap:.35rem}
+small.hint{color:#7a8894}
+#msg{padding:.4rem 1.5rem;font-size:.85rem;color:#b3261e;min-height:1.1rem}
+</style>
+</head>
+<body>
+<header><h1>工伤事故伤者台账</h1><small>复诊 · 双岗许可 · 返岗/长期限制结论</small></header>
+<div class="bar">
+  身份<input id="actor" value="safety1" size="9">
+  <select id="role">
+    <option value="safety_manager">安全员</option>
+    <option value="foreman">班组长</option>
+    <option value="investigator">调查员</option>
+    <option value="reporter">报告人</option>
+    <option value="viewer">查看者</option>
+  </select>
+  岗位<input id="position" placeholder="按岗位筛选" size="10">
+  事故状态
+  <select id="itemStatus">
+    <option value="">全部</option>
+    <option>reported</option><option>investigating</option>
+    <option>corrective_action</option><option>verification</option>
+    <option>closed</option>
+  </select>
+  <button onclick="load()">刷新台账</button>
+  <button class="ghost" onclick="promptRegister()">登记伤者</button>
+</div>
+<div id="msg"></div>
+<main>
+  <section class="col"><h2>待复诊 <span id="c-followup_due"></span></h2><div id="g-followup_due"></div></section>
+  <section class="col"><h2>待许可 <span id="c-permit_pending"></span></h2><div id="g-permit_pending"></div></section>
+  <section class="col"><h2>可返岗 <span id="c-return_ready"></span></h2><div id="g-return_ready"></div></section>
+</main>
+<script>
+const BLOCK={serious_injury:"伤情严重",no_followup:"尚无复诊",followup_overdue:"复诊到期未到",mobility_not_full:"活动能力不达标"};
+const MOB={restricted:"受限",partial:"部分",full:"完全"};
+const SLOT={safety_manager:["safety","安全员确认"],foreman:["foreman","班组长确认"]};
+function headers(){return {'X-Actor':actor.value,'X-Role':role.value,'Content-Type':'application/json'}}
+function msg(t){document.getElementById('msg').textContent=t||""}
+async function api(path,opt){
+  const r=await fetch(path,Object.assign({headers:headers()},opt||{}));
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.message||("HTTP "+r.status));
+  return data
+}
+async function load(){
+  try{
+    const q=new URLSearchParams();
+    if(position.value)q.set("position",position.value);
+    if(itemStatus.value)q.set("item_status",itemStatus.value);
+    const board=await api("/api/workers?"+q.toString());
+    for(const g of board.groups){
+      document.getElementById("c-"+g.key).textContent="("+g.workers.length+")";
+      document.getElementById("g-"+g.key).innerHTML=g.workers.map(card).join("")||"<small class='hint'>无</small>";
+    }
+    msg("");
+  }catch(e){msg(e.message)}
+}
+function card(w){
+  const tags=[];
+  if(w.serious)tags.push('<span class="tag serious">严重</span>');
+  if(w.conclusion==="long_term_restriction")tags.push('<span class="tag ltr">长期限制</span>');
+  if(w.conclusion==="returned")tags.push('<span class="tag returned">已返岗</span>');
+  for(const b of w.medical_blockers)tags.push('<span class="tag block">'+BLOCK[b]+'</span>');
+  const fu=w.latest_follow_up;
+  const fuText=fu?("最近复诊 "+fu.visit_date+"｜活动能力 "+MOB[fu.mobility]+"｜限制："+fu.restrictions+"｜医生："+fu.doctor_opinion+(fu.next_visit_date?("｜下次复诊 "+fu.next_visit_date):""))
+    :"<small class='hint'>尚无复诊记录</small>";
+  const conf=w.permit_complete?"<div>许可：安全员 "+w.safety_actor+" ／ 班组长 "+w.foreman_actor+(w.permit_voided?"（已作废）":"")+"</div>"
+    :"<div>许可："+(w.safety_actor?"安全员 "+w.safety_actor+" 已确认":"缺安全员")+"，"+(w.foreman_actor?"班组长 "+w.foreman_actor+" 已确认":"缺班组长")+(w.permit_voided?"（已作废）":"")+"</div>";
+  let acts="";
+  if(["safety_manager","investigator"].includes(role.value))acts+='<button onclick="promptFollowup('+w.id+')">加复诊</button>';
+  if(SLOT[role.value]&&!w.conclusion)acts+='<button onclick="confirmSlot('+w.id+',\''+SLOT[role.value][0]+'\')">'+SLOT[role.value][1]+'</button>';
+  if(role.value==="safety_manager"&&!w.conclusion)acts+='<button onclick="promptConclusion('+w.id+')">下结论</button>';
+  return '<div class="card"><div class="name">'+w.name+' <small>#'+w.badge+'</small></div>'
+    +'<div class="meta">'+tags.join("")+'</div>'
+    +'<div class="meta">'+w.position+'｜伤部：'+w.injury_part+'｜事故#'+w.item_id+' '+w.item_status+'</div>'
+    +'<div class="meta">首诊 '+w.first_visit_date+'｜预计返岗 '+w.expected_return_date+'</div>'
+    +'<div class="meta">'+fuText+'</div>'+conf
+    +(w.conclusion?'<div>结论：'+(w.conclusion==="returned"?"最终返岗":"长期限制")+"｜"+w.conclusion_remark+"</div>":"")
+    +(acts?'<div class="actions">'+acts+"</div>":"")+'</div>';
+}
+async function promptRegister(){
+  const itemId=prompt("事故ID？");if(!itemId)return;
+  const body={name:prompt("姓名？"),badge:prompt("员工编号？"),position:prompt("岗位？"),
+    injury_part:prompt("受伤部位？"),serious:confirm("是否伤情严重？"),
+    first_visit_date:prompt("首诊日 YYYY-MM-DD？"),expected_return_date:prompt("预计返岗日 YYYY-MM-DD？")};
+  if(!body.name||!body.badge)return;
+  try{await api("/api/items/"+itemId+"/workers",{method:"POST",body:JSON.stringify(body)});load()}catch(e){msg(e.message)}
+}
+async function promptFollowup(id){
+  const body={visit_date:prompt("复诊日 YYYY-MM-DD？"),mobility:prompt("活动能力 restricted/partial/full？","full"),
+    restrictions:prompt("岗位限制？","无"),doctor_opinion:prompt("医生意见？"),next_visit_date:prompt("下次复诊日 YYYY-MM-DD（可空）","")||null};
+  if(!body.visit_date)return;
+  try{await api("/api/workers/"+id+"/followups",{method:"POST",body:JSON.stringify(body)});load()}catch(e){msg(e.message)}
+}
+async function confirmSlot(id,slot){
+  try{await api("/api/workers/"+id+"/confirmations",{method:"POST",body:JSON.stringify({slot})});load()}catch(e){msg(e.message)}
+}
+async function promptConclusion(id){
+  const c=prompt("结论 returned / long_term_restriction？","returned");if(!c)return;
+  const remark=prompt("结论说明？");if(!remark)return;
+  try{await api("/api/workers/"+id+"/conclusion",{method:"POST",body:JSON.stringify({conclusion:c,conclusion_remark:remark})});load()}catch(e){msg(e.message)}
+}
+load();
+</script>
+</body>
+</html>
